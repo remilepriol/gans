@@ -33,21 +33,17 @@ def get_arguments():
     parser.add_argument('--beta1g', type=float, default=0.5, help='beta1 for generator adam.')
     parser.add_argument('--beta2', type=float, default=0.999, help='beta2 for adam.')
     parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
+    parser.add_argument('--workers', type=int, default=2, help='number of data loading workers')
     parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
     parser.add_argument('--manual-seed', type=int, help='manual seed')
 
     # GAN architecture
-    parser.add_argument('--mode', type=str, default='mmgan',
+    parser.add_argument('--mode', type=str, default='wgan',
                         help='Type of GAN: minimax, non-saturating, least-square, Wasserstein.',
                         choices=['mmgan', 'nsgan', 'lsgan', 'wgan'])
-    parser.add_argument('--upsample', type=str, default='convtranspose',
+    parser.add_argument('--upsample', type=str, default='nearest',
                         choices=['convtranspose', 'nearest', 'bilinear'],
                         help='Method used in the generator to up-sample images.')
-    parser.add_argument('--critic-iter', type=int, default=1,
-                        help='number of critic iterations')
-    parser.add_argument('--gen-iter', type=int, default=1,
-                        help='number of generator iterations')
     parser.add_argument('--lanbda', type=float, default=0,
                         help='Regularization factor for the gradient penalty.')
     parser.add_argument('--penalty', type=str, default='both',
@@ -60,7 +56,7 @@ def get_arguments():
                         help='If True, use batch normalization in the discriminator.')
 
     # Checkpoints
-    parser.add_argument('--outf', default='gan/',
+    parser.add_argument('--outf', default='results/',
                         help='folder to output images and model checkpoints '
                              'inside /data/milatmp1/$USER/')
     parser.add_argument('--timedirectory', type=str2bool, default='false',
@@ -109,7 +105,8 @@ def get_arguments():
         cuda.manual_seed_all(opt.seed)
 
     # OUT FOLDER
-    root_path = os.path.join('/data/milatmp1', user, opt.outf, opt.dataset)
+    # root_path = os.path.join('/data/milatmp1', user, opt.outf, opt.dataset)
+    root_path = os.path.join(user, opt.outf, opt.dataset)
     strpenalty = '0' if opt.lanbda <= 0 else f'{opt.lanbda}{opt.penalty}'
     strspectral = '_SN' if opt.spectral_norm else ''
     strbatchnorm = '' if opt.batch_norm else '_noBN'

@@ -112,132 +112,125 @@ if __name__ == '__main__':
     for epoch in range(opt.start_epoch, opt.niter + 1):
         for i, data in enumerate(dataloader):
             step += 1
-            for _ in range(opt.critic_iter):
-                ############################
-                # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-                ###########################
+            ############################
+            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+            ###########################
 
-                # train with real
-                netD.zero_grad()
+            # train with real
+            netD.zero_grad()
 
-                real_cpu, _ = data
-                batch_size = real_cpu.size(0)
+            real_cpu, _ = data
+            batch_size = real_cpu.size(0)
 
-                real_samples = real_cpu.cuda() if opt.cuda else real_cpu.clone()
-                real = Variable(real_samples)
-                label.resize_(batch_size).fill_(real_label)
-                labelv = Variable(label)
+            real_samples = real_cpu.cuda() if opt.cuda else real_cpu.clone()
+            real = Variable(real_samples)
+            label.resize_(batch_size).fill_(real_label)
+            labelv = Variable(label)
 
-                real_out = netD(real).squeeze()  # forward
-                errD_real = criterion(real_out, labelv)
-                errD_real.backward()
+            real_out = netD(real).squeeze()  # forward
+            errD_real = criterion(real_out, labelv)
+            errD_real.backward()
 
-                real_sensitivity = netD.get_sensitivity()
+            real_sensitivity = netD.get_sensitivity()
 
-                # train with fake
-                latent_noise.resize_(batch_size, opt.nz, 1, 1).normal_(0, 1)
-                noisev = Variable(latent_noise)
-                labelv = Variable(label.fill_(fake_label))
+            # train with fake
+            latent_noise.resize_(batch_size, opt.nz, 1, 1).normal_(0, 1)
+            noisev = Variable(latent_noise)
+            labelv = Variable(label.fill_(fake_label))
 
-                fake = netG(noisev)
-                fake_out = netD(fake.detach()).squeeze()  # forward
-                errD_fake = criterion(fake_out, labelv)
-                errD_fake.backward()
+            fake = netG(noisev)
+            fake_out = netD(fake.detach()).squeeze()  # forward
+            errD_fake = criterion(fake_out, labelv)
+            errD_fake.backward()
 
-                fake_sensitivity = netD.get_sensitivity()
+            fake_sensitivity = netD.get_sensitivity()
 
-                # gradient penalty
-                gp = 0
-                if opt.lanbda > 0:
+            # gradient penalty
+            gp = 0
+            if opt.lanbda > 0:
 
-                    if opt.penalty == 'grad_g':
-                        # penalize gradient wrt generator's parameters
-                        gp = netD.gradient_penalty_g(noisev.detach(), netG)
+                if opt.penalty == 'grad_g':
+                    # penalize gradient wrt generator's parameters
+                    gp = netD.gradient_penalty_g(noisev.detach(), netG)
 
-                    elif opt.penalty == 'wgangp':
-                        # interpolate and subtract 1
-                        intercoeffs = torch.Tensor(
-                            batch_size, 1, 1, 1).uniform_(0, 1)
-                        if opt.cuda:
-                            intercoeffs = intercoeffs.cuda()
-                        inp = real.data * intercoeffs + fake.data * (1 - intercoeffs)
-                        gp = netD.wgan_gp(inp)
-                    elif opt.penalty == 'fischer':
-                        # penalise trace Fischer matrix of the discriminant
+                elif opt.penalty == 'wgangp':
+                    # interpolate and subtract 1
+                    intercoeffs = torch.Tensor(
+                        batch_size, 1, 1, 1).uniform_(0, 1)
+                    if opt.cuda:
+                        intercoeffs = intercoeffs.cuda()
+                    inp = real.data * intercoeffs + fake.data * (1 - intercoeffs)
+                    gp = netD.wgan_gp(inp)
+                elif opt.penalty == 'fischer':
+                    # penalise trace Fischer matrix of the discriminant
+                    batch_half = int(batch_size / 2)
+                    inp = torch.cat([
+                        real.data[:batch_half],
+                        fake.data[:batch_half]],
+                        dim=0)
+                    gp = netD.fischer_gp(inp)
+
+                else:
+                    # penalize gradient wrt samples
+                    if opt.penalty == 'real':
+                        inp = real.data
+                    elif opt.penalty == 'fake':
+                        inp = fake.data
+                    elif opt.penalty == 'both':
                         batch_half = int(batch_size / 2)
                         inp = torch.cat([
                             real.data[:batch_half],
                             fake.data[:batch_half]],
                             dim=0)
-                        gp = netD.fischer_gp(inp)
+                    elif opt.penalty == 'uniform':
+                        inp = sample_noise.uniform_(-1, 1)
+                    elif opt.penalty == 'midinterpol':
+                        inp = 0.5 * (real.data + fake.data)
+                    gp = netD.gradient_penalty(inp)
 
-                    else:
-                        # penalize gradient wrt samples
-                        if opt.penalty == 'real':
-                            inp = real.data
-                        elif opt.penalty == 'fake':
-                            inp = fake.data
-                        elif opt.penalty == 'both':
-                            batch_half = int(batch_size / 2)
-                            inp = torch.cat([
-                                real.data[:batch_half],
-                                fake.data[:batch_half]],
-                                dim=0)
-                        elif opt.penalty == 'uniform':
-                            inp = sample_noise.uniform_(-1, 1)
-                        elif opt.penalty == 'midinterpol':
-                            inp = 0.5 * (real.data + fake.data)
-                        gp = netD.gradient_penalty(inp)
+                (opt.lanbda * gp).backward()
 
-                    (opt.lanbda * gp).backward()
+            # update
+            optimizerD.step()
 
-                # update
-                optimizerD.step()
+            # monitor
+            real_acc = sigmoid(real_out).data.round().mean()
+            f_x = real_out.data.mean()
+            D_x = sigmoid(real_out).data.mean()
 
-                # monitor
-                real_acc = sigmoid(real_out).data.round().mean()
-                f_x = real_out.data.mean()
-                D_x = sigmoid(real_out).data.mean()
+            fake_acc = 1 - sigmoid(fake_out).data.round().mean()
+            f_G_z1 = fake_out.data.mean()
+            D_G_z1 = sigmoid(fake_out).data.mean()
+            errD = errD_real + errD_fake
 
-                fake_acc = 1 - sigmoid(fake_out).data.round().mean()
-                f_G_z1 = fake_out.data.mean()
-                D_G_z1 = sigmoid(fake_out).data.mean()
-                errD = errD_real + errD_fake
+            ############################
+            # (2) Update G network: maximize log(D(G(z)))
+            ###########################
+            netG.zero_grad()
 
-            for k in range(opt.gen_iter):
-                ############################
-                # (2) Update G network: maximize log(D(G(z)))
-                ###########################
-                if k > 0:
-                    latent_noise.resize_(opt.batchSize, opt.nz, 1, 1).normal_(0, 1)
-                    noisev = Variable(latent_noise)
-                    fake = netG(noisev)
+            fake_out = netD(fake).squeeze()
+            if opt.mode == 'nsgan':  # non-saturating gan
+                # use the real labels (1) for generator cost
+                labelv = Variable(label.fill_(real_label))
+                errG = criterion(fake_out, labelv)
+            elif opt.mode == 'mmgan':  # minimax gan
+                # use fake labels and opposite of criterion
+                labelv = Variable(label.fill_(fake_label))
+                errG = - criterion(fake_out, labelv)
+            elif opt.mode == 'lsgan':  # least square gan NOT WORKING
+                # use real labels for generator
+                labelv = Variable(label.fill_(real_label))
+                errG = criterion(fake_out, labelv)
+            elif opt.mode == 'wgan':
+                labelv = Variable(label.fill_(real_label))
+                errG = criterion(fake_out, labelv)
 
-                netG.zero_grad()
+            errG.backward()
+            optimizerG.step()
 
-                fake_out = netD(fake).squeeze()
-                if opt.mode == 'nsgan':  # non-saturating gan
-                    # use the real labels (1) for generator cost
-                    labelv = Variable(label.fill_(real_label))
-                    errG = criterion(fake_out, labelv)
-                elif opt.mode == 'mmgan':  # minimax gan
-                    # use fake labels and opposite of criterion
-                    labelv = Variable(label.fill_(fake_label))
-                    errG = - criterion(fake_out, labelv)
-                elif opt.mode == 'lsgan':  # least square gan NOT WORKING
-                    # use real labels for generator
-                    labelv = Variable(label.fill_(real_label))
-                    errG = criterion(fake_out, labelv)
-                elif opt.mode == 'wgan':
-                    labelv = Variable(label.fill_(real_label))
-                    errG = criterion(fake_out, labelv)
-
-                errG.backward()
-                optimizerG.step()
-
-                # monitor
-                f_G_z2 = fake_out.data.mean()
-                D_G_z2 = sigmoid(fake_out).data.mean()
+            # monitor
+            f_G_z2 = fake_out.data.mean()
+            D_G_z2 = sigmoid(fake_out).data.mean()
 
             if step % 100 == 0:  # print and log info
                 print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f | %.4f'
