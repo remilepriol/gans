@@ -39,6 +39,7 @@ if __name__ == '__main__':
         subprocess.call(['rsync', '-ru', opt.dataroot, opt.datatmp])
 
         dataset = vdset.ImageFolder(root=opt.datatmp, transform=transform)
+
     dataloader = DataLoader(
         dataset,
         batch_size=opt.batchSize,
@@ -64,14 +65,14 @@ if __name__ == '__main__':
             return ((1 - 2 * target) * out).mean()
 
     # input to the discriminator of size [opt.batchSize, 3, opt.imageSize, opt.imageSize]
-    sample_noise = torch.FloatTensor(opt.batchSize, 3, opt.imageSize, opt.imageSize)
+    sample_noise = torch.Tensor(opt.batchSize, 3, opt.imageSize, opt.imageSize)
     # input noise for the generator
-    latent_noise = torch.FloatTensor(opt.batchSize, opt.nz, 1, 1)
+    latent_noise = torch.Tensor(opt.batchSize, opt.nz, 1, 1)
     # input noise to plot samples
-    fixed_noise = torch.FloatTensor(opt.batchSize, opt.nz, 1, 1).normal_(0, 1)
+    fixed_noise = torch.Tensor(opt.batchSize, opt.nz, 1, 1).normal_(0, 1)
 
     # labels to use with criterion
-    label = torch.FloatTensor(opt.batchSize)
+    label = torch.Tensor(opt.batchSize)
     real_label = 1
     fake_label = 0
 
@@ -155,7 +156,7 @@ if __name__ == '__main__':
 
                     elif opt.penalty == 'wgangp':
                         # interpolate and subtract 1
-                        intercoeffs = torch.FloatTensor(
+                        intercoeffs = torch.Tensor(
                             batch_size, 1, 1, 1).uniform_(0, 1)
                         if opt.cuda:
                             intercoeffs = intercoeffs.cuda()
@@ -305,7 +306,7 @@ if __name__ == '__main__':
                 #     fake_interpolation.data, step, nrow=10)
 
             if step % 1000 == 0:  # compute scores
-                noise = torch.FloatTensor(10000, opt.nz, 1, 1).normal_(0, 1)
+                noise = torch.Tensor(10000, opt.nz, 1, 1).normal_(0, 1)
                 if opt.cuda:
                     noise = noise.cuda()
                 noise = Variable(noise, volatile=True)
