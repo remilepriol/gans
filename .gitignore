@@ -1,0 +1,6 @@
+.idea
+.ftpconfig
+*.orig
+*.out
+*.swp
+tmp
