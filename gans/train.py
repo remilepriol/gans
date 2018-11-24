@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.datasets as vdset
 import torchvision.transforms as vtransforms
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 import gans.spectral_norm
@@ -222,19 +221,17 @@ def main():
             if step % 10 == 0:  # print and log info
                 print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f | %.4f'
                       % (epoch, opt.niter, i + 1, len(dataloader),
-                         errD.data[0], errG.data[0], D_x, D_G_z1, D_G_z2))
+                         errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
 
                 netD.get_sensitivity()
 
                 # measure gradient norm on real and fake data
-                real = data[0]
-                if opt.cuda:
-                    real = real.cuda()
+                real = data[0].to(device)
                 gp_real = netD.gradient_penalty(real, requires_grad=False)
 
                 latent_noise.normal_(0, 1)
-                fake = netG(Variable(latent_noise, requires_grad=False))
-                gp_fake = netD.gradient_penalty(fake.data, requires_grad=False)
+                fake = netG(latent_noise, requires_grad=False)
+                gp_fake = netD.gradient_penalty(fake, requires_grad=False)
 
                 info = {
                     'losses/disc_cost': errD.data[0],
@@ -286,13 +283,12 @@ def main():
                 #     fake_interpolation.data, step, nrow=10)
 
             if step % 1000 == 0:  # compute scores
-                noise = torch.Tensor(10000, opt.nz, 1, 1).normal_(0, 1)
-                if opt.cuda:
-                    noise = noise.cuda()
-                noise = Variable(noise, volatile=True)
-                fake = netG(noise)
+                noise = torch.randn(10000, opt.nz, 1, 1).to(device)
 
-                inception, _ = scores.inception_score(fake.data, resize=True)
+                with torch.no_grad():
+                    fake = netG(noise)
+
+                inception, _ = scores.inception_score(fake.detach(), resize=True)
                 # mode, _ = scores.mode_score(fake.data, real_samples, resize=True)
 
                 # ishaan = scores.ishaan_inception(fake.data)

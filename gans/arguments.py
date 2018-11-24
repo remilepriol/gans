@@ -55,7 +55,7 @@ def get_arguments():
 
     # Checkpoints
     parser.add_argument('--server', default='local', choices=['local', 'elisa'])
-    parser.add_argument('--timedirectory', type=str2bool, default='false',
+    parser.add_argument('--timedirectory', type=str2bool, default='true',
                         help='If true, use time for the log directory, '
                              'else only use hyper-parameters.')
     parser.add_argument('--resume', type=str2bool, default='true',
