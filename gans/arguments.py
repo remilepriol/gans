@@ -8,15 +8,13 @@ import random
 import subprocess
 
 import torch
-from torch import cuda
-from torch.backends import cudnn
 
 
 def get_arguments():
     parser = argparse.ArgumentParser()
 
     # Dataset
-    parser.add_argument('--dataset', default='celeba')
+    parser.add_argument('--dataset', default='celebsmall')
     parser.add_argument('--imageSize', type=int, default=64,
                         help='the height / width of the input image to network')
     parser.add_argument('--nz', type=int, default=100,
@@ -56,9 +54,7 @@ def get_arguments():
                         help='If True, use batch normalization in the discriminator.')
 
     # Checkpoints
-    parser.add_argument('--outf', default='results/',
-                        help='folder to output images and model checkpoints '
-                             'inside /data/milatmp1/$USER/')
+    parser.add_argument('--server', default='local', choices=['local', 'elisa'])
     parser.add_argument('--timedirectory', type=str2bool, default='false',
                         help='If true, use time for the log directory, '
                              'else only use hyper-parameters.')
@@ -67,30 +63,28 @@ def get_arguments():
 
     opt = parser.parse_args()
     print(opt)
-    user = getpass.getuser()
 
     # DATASET
     opt.dataset = opt.dataset.lower()
-    opt.datatmp = os.path.join('/Tmp', user, opt.dataset)
-    if opt.dataset == 'celeba':
-        opt.dataroot = '/data/lisa/data/celeba'
-    elif opt.dataset == 'tinyimagenet':
-        opt.dataroot = '/data/lisa/data/tiny-imagenet-200/train'
-    elif opt.dataset == 'celebsmall':
-        opt.dataroot = f'/data/milatmp1/{user}/celebsmall'
-    elif opt.dataset == 'cifar10':
-        opt.imageSize = 32
-        opt.ngf = 32
-        opt.ndf = 32
-    else:
-        raise NotImplementedError
+
+    if opt.server == 'elisa':
+        user = getpass.getuser()
+        opt.datatmp = os.path.join('/Tmp', user, opt.dataset)
+
+        if opt.dataset == 'celeba':
+            opt.dataroot = '/data/lisa/data/celeba'
+        elif opt.dataset == 'tinyimagenet':
+            opt.dataroot = '/data/lisa/data/tiny-imagenet-200/train'
+        elif opt.dataset == 'celebsmall':
+            opt.dataroot = f'/data/milatmp1/{user}/celebsmall'
+
+    if opt.server == 'local':
+        if opt.dataset == 'celebsmall':
+            opt.dataroot = '../celebsmall/'
+            opt.datatmp = opt.dataroot
 
     # Number of input channels (RGB)
     opt.nc = 3
-
-    # CUDA
-    cudnn.benchmark = True
-    opt.cuda = cuda.is_available()
 
     # SEED
     if opt.manual_seed is None:
@@ -98,21 +92,22 @@ def get_arguments():
     else:
         opt.seed = opt.manual_seed
     print("Random Seed: ", opt.seed)
-
     random.seed(opt.seed)
     torch.manual_seed(opt.seed)
-    if opt.cuda:
-        cuda.manual_seed_all(opt.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(opt.seed)
 
     # OUT FOLDER
-    # root_path = os.path.join('/data/milatmp1', user, opt.outf, opt.dataset)
-    root_path = os.path.join(user, opt.outf, opt.dataset)
+    if opt.server=='elisa':
+        root_path = os.path.join('/data/milatmp1', user, 'gans', opt.dataset)
+    elif opt.server=='local':
+        root_path = os.path.join('../results/', opt.dataset)
+
     strpenalty = '0' if opt.lanbda <= 0 else f'{opt.lanbda}{opt.penalty}'
     strspectral = '_SN' if opt.spectral_norm else ''
     strbatchnorm = '' if opt.batch_norm else '_noBN'
     folder_name = (
         f'{opt.mode}_gp={strpenalty}{strspectral}{strbatchnorm}'
-        f'_citer={opt.critic_iter}_giter={opt.gen_iter}'
         f'_lr={opt.lr}_beta1d={opt.beta1d}_beta1g={opt.beta1g}_beta2={opt.beta2}'
         f'_upsample={opt.upsample}'
     )
@@ -130,8 +125,8 @@ def get_arguments():
     if not opt.resume:
         if os.path.isdir(opt.outf):
             subprocess.call('rm', '-r', opt.outf)
-    os.makedirs(opt.outf, exist_ok=True)
 
+    os.makedirs(opt.outf, exist_ok=True)
     with open(os.path.join(opt.outf, 'config.json'), 'w') as fp:
         json.dump(vars(opt), fp, indent=4)
 
