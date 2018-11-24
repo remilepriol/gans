@@ -4,6 +4,7 @@ import subprocess
 import tensorboardX
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.datasets as vdset
 import torchvision.transforms as vtransforms
 from torch.autograd import Variable
@@ -12,10 +13,8 @@ from torch.utils.data import DataLoader
 import gans.spectral_norm
 from gans import arguments, models, scores, utils
 
-sigmoid = nn.Sigmoid()
 
-if __name__ == '__main__':
-
+def main():
     opt = arguments.get_arguments()
 
     writer = tensorboardX.SummaryWriter(opt.outf)
@@ -32,11 +31,12 @@ if __name__ == '__main__':
         dataset = vdset.CIFAR10(opt.datatmp, download=True, transform=transform)
 
     else:  # folder dataset
-        print(f'Copying dataset {opt.dataset} from {opt.dataroot} to {opt.datatmp}')
-        if not os.path.isdir(opt.datatmp):
-            os.makedirs(opt.datatmp, exist_ok=True)
-        # rsync -ru stands for recusively updated
-        subprocess.call(['rsync', '-ru', opt.dataroot, opt.datatmp])
+        if opt.dataroot != opt.datatmp:
+            print(f'Copying dataset {opt.dataset} from {opt.dataroot} to {opt.datatmp}')
+            if not os.path.isdir(opt.datatmp):
+                os.makedirs(opt.datatmp, exist_ok=True)
+            # rsync -ru stands for recusively updated
+            subprocess.call(['rsync', '-ru', opt.dataroot, opt.datatmp])
 
         dataset = vdset.ImageFolder(root=opt.datatmp, transform=transform)
 
@@ -49,9 +49,17 @@ if __name__ == '__main__':
     )
     print('Dataloader done')
 
+    # DEVICE
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print('running on gpu')
+    else:
+        device = torch.device('cpu')
+        print('running on cpu')
+
     # INITIALIZE MODELS
-    netG = models.GeneratorNet(opt)
-    netD = models.DiscriminatorNet(opt)
+    netG = models.GeneratorNet(opt).to(device)
+    netD = models.DiscriminatorNet(opt).to(device)
 
     print(netD)
     print(netG)
@@ -64,34 +72,19 @@ if __name__ == '__main__':
         def criterion(out, target):
             return ((1 - 2 * target) * out).mean()
 
-    # input to the discriminator of size [opt.batchSize, 3, opt.imageSize, opt.imageSize]
-    sample_noise = torch.Tensor(opt.batchSize, 3, opt.imageSize, opt.imageSize)
-    # input noise for the generator
-    latent_noise = torch.Tensor(opt.batchSize, opt.nz, 1, 1)
+    # input size of the discriminator
+    sample_size = [opt.batchSize, 3, opt.imageSize, opt.imageSize]
+    # input size of the generator
+    latent_size = [opt.batchSize, opt.nz, 1, 1]
     # input noise to plot samples
-    fixed_noise = torch.Tensor(opt.batchSize, opt.nz, 1, 1).normal_(0, 1)
-
-    # labels to use with criterion
-    label = torch.Tensor(opt.batchSize)
-    real_label = 1
-    fake_label = 0
-
-    print('Move model and tensors to GPU')
-    if opt.cuda:
-        netD.cuda()
-        netG.cuda()
-        label = label.cuda()
-        sample_noise = sample_noise.cuda()
-        latent_noise = latent_noise.cuda()
-        fixed_noise = fixed_noise.cuda()
-
-    fixed_noise = Variable(fixed_noise)
+    fixed_noise = torch.randn(latent_size, device=device)
 
     print('Setup optimizer')
     optimizerD = torch.optim.Adam(
         netD.parameters(), lr=opt.lr, betas=(opt.beta1d, opt.beta2))
     optimizerG = torch.optim.Adam(
         netG.parameters(), lr=opt.lr, betas=(opt.beta1g, opt.beta2))
+
 
     # optionally resume from a checkpoint
     opt.last_checkpoint = f'{opt.outf}/last_state.pth'
@@ -119,28 +112,25 @@ if __name__ == '__main__':
             # train with real
             netD.zero_grad()
 
-            real_cpu, _ = data
-            batch_size = real_cpu.size(0)
+            real_samples, _ = data
+            batch_size = real_samples.size(0)
 
-            real_samples = real_cpu.cuda() if opt.cuda else real_cpu.clone()
-            real = Variable(real_samples)
-            label.resize_(batch_size).fill_(real_label)
-            labelv = Variable(label)
+            real_samples = real_samples.to(device)
+            real_labels = torch.ones(batch_size, device=device)
 
-            real_out = netD(real).squeeze()  # forward
-            errD_real = criterion(real_out, labelv)
+            real_out = netD(real_samples).squeeze()  # forward
+            errD_real = criterion(real_out, real_labels)
             errD_real.backward()
 
             real_sensitivity = netD.get_sensitivity()
 
             # train with fake
-            latent_noise.resize_(batch_size, opt.nz, 1, 1).normal_(0, 1)
-            noisev = Variable(latent_noise)
-            labelv = Variable(label.fill_(fake_label))
+            latent_noise = torch.randn(latent_size, device=device)
+            fake_labels = torch.zeros(batch_size, device=device)
 
-            fake = netG(noisev)
-            fake_out = netD(fake.detach()).squeeze()  # forward
-            errD_fake = criterion(fake_out, labelv)
+            fake_samples = netG(latent_noise)
+            fake_out = netD(fake_samples.detach()).squeeze()  # forward
+            errD_fake = criterion(fake_out, fake_labels)
             errD_fake.backward()
 
             fake_sensitivity = netD.get_sensitivity()
@@ -151,42 +141,42 @@ if __name__ == '__main__':
 
                 if opt.penalty == 'grad_g':
                     # penalize gradient wrt generator's parameters
-                    gp = netD.gradient_penalty_g(noisev.detach(), netG)
+                    gp = netD.gradient_penalty_g(latent_noise.detach(), netG)
 
                 elif opt.penalty == 'wgangp':
                     # interpolate and subtract 1
-                    intercoeffs = torch.Tensor(
-                        batch_size, 1, 1, 1).uniform_(0, 1)
+                    intercoeffs = torch.rand([batch_size, 1, 1, 1], device=device)
                     if opt.cuda:
                         intercoeffs = intercoeffs.cuda()
-                    inp = real.data * intercoeffs + fake.data * (1 - intercoeffs)
-                    gp = netD.wgan_gp(inp)
+                    inter_samples = real_samples.data * intercoeffs + fake_samples.data * (1 - intercoeffs)
+                    gp = netD.wgan_gp(inter_samples)
+
                 elif opt.penalty == 'fischer':
-                    # penalise trace Fischer matrix of the discriminant
+                    # penalize trace Fischer matrix of the discriminant
                     batch_half = int(batch_size / 2)
                     inp = torch.cat([
-                        real.data[:batch_half],
-                        fake.data[:batch_half]],
+                        real_samples.data[:batch_half],
+                        fake_samples.data[:batch_half]],
                         dim=0)
                     gp = netD.fischer_gp(inp)
 
                 else:
                     # penalize gradient wrt samples
                     if opt.penalty == 'real':
-                        inp = real.data
+                        inp = real_samples
                     elif opt.penalty == 'fake':
-                        inp = fake.data
+                        inp = fake_samples
                     elif opt.penalty == 'both':
                         batch_half = int(batch_size / 2)
                         inp = torch.cat([
-                            real.data[:batch_half],
-                            fake.data[:batch_half]],
+                            real_samples[:batch_half],
+                            fake_samples[:batch_half]],
                             dim=0)
                     elif opt.penalty == 'uniform':
-                        inp = sample_noise.uniform_(-1, 1)
+                        inp = torch.randn(sample_size, device=device)
                     elif opt.penalty == 'midinterpol':
-                        inp = 0.5 * (real.data + fake.data)
-                    gp = netD.gradient_penalty(inp)
+                        inp = 0.5 * (real_samples + fake_samples)
+                    gp = netD.gradient_penalty(inp.detach())
 
                 (opt.lanbda * gp).backward()
 
@@ -194,13 +184,13 @@ if __name__ == '__main__':
             optimizerD.step()
 
             # monitor
-            real_acc = sigmoid(real_out).data.round().mean()
+            real_acc = torch.sigmoid(real_out).data.round().mean()
             f_x = real_out.data.mean()
-            D_x = sigmoid(real_out).data.mean()
+            D_x = torch.sigmoid(real_out).data.mean()
 
-            fake_acc = 1 - sigmoid(fake_out).data.round().mean()
+            fake_acc = 1 - torch.sigmoid(fake_out).data.round().mean()
             f_G_z1 = fake_out.data.mean()
-            D_G_z1 = sigmoid(fake_out).data.mean()
+            D_G_z1 = torch.sigmoid(fake_out).data.mean()
             errD = errD_real + errD_fake
 
             ############################
@@ -208,31 +198,28 @@ if __name__ == '__main__':
             ###########################
             netG.zero_grad()
 
-            fake_out = netD(fake).squeeze()
+            fake_out = netD(fake_samples).squeeze()
+
             if opt.mode == 'nsgan':  # non-saturating gan
                 # use the real labels (1) for generator cost
-                labelv = Variable(label.fill_(real_label))
-                errG = criterion(fake_out, labelv)
+                errG = criterion(fake_out, real_labels)
             elif opt.mode == 'mmgan':  # minimax gan
                 # use fake labels and opposite of criterion
-                labelv = Variable(label.fill_(fake_label))
-                errG = - criterion(fake_out, labelv)
+                errG = - criterion(fake_out, fake_labels)
             elif opt.mode == 'lsgan':  # least square gan NOT WORKING
                 # use real labels for generator
-                labelv = Variable(label.fill_(real_label))
-                errG = criterion(fake_out, labelv)
+                errG = criterion(fake_out, real_labels)
             elif opt.mode == 'wgan':
-                labelv = Variable(label.fill_(real_label))
-                errG = criterion(fake_out, labelv)
+                errG = criterion(fake_out, real_labels)
 
             errG.backward()
             optimizerG.step()
 
             # monitor
-            f_G_z2 = fake_out.data.mean()
-            D_G_z2 = sigmoid(fake_out).data.mean()
+            f_G_z2 = fake_out.mean()
+            D_G_z2 = torch.sigmoid(fake_out).data.mean()
 
-            if step % 100 == 0:  # print and log info
+            if step % 10 == 0:  # print and log info
                 print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f | %.4f'
                       % (epoch, opt.niter, i + 1, len(dataloader),
                          errD.data[0], errG.data[0], D_x, D_G_z1, D_G_z2))
